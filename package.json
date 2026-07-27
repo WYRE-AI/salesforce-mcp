@@ -39,7 +39,7 @@
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
-    "@semantic-release/changelog": "^6.0.3"
+    "@semantic-release/changelog": "^7.0.0"
   },
   "engines": {
     "node": ">=22"
