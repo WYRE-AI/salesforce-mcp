@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.wyre-technology/salesforce-mcp",
+  "name": "io.github.WYRE-AI/salesforce-mcp",
   "title": "Salesforce",
   "description": "MCP server for Salesforce CRM — Accounts, Contacts, Opportunities, Leads, Cases.",
   "repository": {
-    "url": "https://github.com/wyre-technology/salesforce-mcp",
+    "url": "https://github.com/WYRE-AI/salesforce-mcp",
     "source": "github"
   },
   "version": "0.0.0",
-  "websiteUrl": "https://github.com/wyre-technology/salesforce-mcp",
+  "websiteUrl": "https://github.com/WYRE-AI/salesforce-mcp",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/wyre-technology/salesforce-mcp:0.0.0",
+      "identifier": "ghcr.io/wyre-ai/salesforce-mcp:0.0.0",
       "transport": {
         "type": "stdio"
       },
