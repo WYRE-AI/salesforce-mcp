@@ -76,7 +76,7 @@ docker run --rm -p 8080:8080 -e MCP_TRANSPORT=http salesforce-mcp:dev
 curl -s http://localhost:8080/health
 ```
 
-The published image lives at `ghcr.io/wyre-technology/salesforce-mcp` with `:latest`, `:sha-<short_sha>`, and `:v<version>` tags.
+The published image lives at `ghcr.io/wyre-ai/salesforce-mcp` with `:latest`, `:sha-<short_sha>`, and `:v<version>` tags.
 
 ## License
 
