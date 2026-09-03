@@ -30,7 +30,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "jsforce": "^3.10.22",
+    "jsforce": "^3.10.24",
     "winston": "^3.11.0",
     "zod": "^4.4.3"
   },
