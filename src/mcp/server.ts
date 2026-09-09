@@ -33,10 +33,12 @@ import {
 import { Logger } from '../utils/logger.js';
 import { buildConnection } from '../services/connection.js';
 import { SALESFORCE_TOOLS, callTool } from '../tools/index.js';
+import { verifyS2sHeader, S2S_HEADER } from '../s2s-verify.js';
 
 const SERVER_NAME = 'salesforce-mcp';
 const SERVER_VERSION = '0.1.0';
 const MCP_PATH = '/mcp';
+const S2S_SECRET = process.env.CONDUIT_S2S_SECRET || '';
 
 export class SalesforceMcpServer {
   private httpServer: HttpServer | undefined;
@@ -149,6 +151,16 @@ export class SalesforceMcpServer {
   }
 
   private async handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (S2S_SECRET && !verifyS2sHeader(req.headers[S2S_HEADER] as string | undefined, S2S_SECRET)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: 'Missing or invalid X-Gateway-S2S header: this endpoint only accepts requests signed by the gateway.',
+        }),
+      );
+      return;
+    }
+
     const creds = this.resolveCredentials(req);
     const problems = validateCredentials(creds);
     if (problems.length) {
