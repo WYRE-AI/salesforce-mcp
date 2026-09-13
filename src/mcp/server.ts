@@ -33,10 +33,17 @@ import {
 import { Logger } from '../utils/logger.js';
 import { buildConnection } from '../services/connection.js';
 import { SALESFORCE_TOOLS, callTool } from '../tools/index.js';
+import { verifyS2sHeader, S2S_HEADER } from '../s2s-verify.js';
 
 const SERVER_NAME = 'salesforce-mcp';
 const SERVER_VERSION = '0.1.0';
 const MCP_PATH = '/mcp';
+
+// Conduit service-to-service auth (gateway#377 parity). Non-empty =
+// enforce X-Gateway-S2S on every /mcp request; empty = disabled, behavior
+// exactly as before (dark-by-default until the gateway provisions this
+// container's derived subkey). See src/s2s-verify.ts.
+const S2S_SECRET = process.env.CONDUIT_S2S_SECRET || '';
 
 export class SalesforceMcpServer {
   private httpServer: HttpServer | undefined;
@@ -111,7 +118,7 @@ export class SalesforceMcpServer {
       this.httpServer!.listen(port, host, () => {
         this.logger.info(
           `salesforce-mcp listening on http://${host}:${port}${MCP_PATH} (health: /health)`,
-          { build: this.envConfig.build, authMode: this.envConfig.authMode },
+          { build: this.envConfig.build, authMode: this.envConfig.authMode, s2sEnforced: S2S_SECRET !== '' },
         );
         resolve();
       });
@@ -140,6 +147,18 @@ export class SalesforceMcpServer {
 
     // ── /mcp: gateway-proxied MCP JSON-RPC ──
     if (url.pathname === MCP_PATH) {
+      // S2S guard runs first: a forged request must never reach credential
+      // handling, where the first tool call would mint a jsforce.Connection.
+      if (S2S_SECRET && !verifyS2sHeader(req.headers[S2S_HEADER] as string | undefined, S2S_SECRET)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error:
+              'Missing or invalid X-Gateway-S2S header: this endpoint only accepts requests signed by the gateway.',
+          }),
+        );
+        return;
+      }
       await this.handleMcpRequest(req, res);
       return;
     }
