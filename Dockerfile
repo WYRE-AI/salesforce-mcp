@@ -55,8 +55,15 @@ USER node
 # Default HTTP mode for gateway-hosted deployment. Standalone stdio usage
 # (for local Claude Desktop testing) can be reached by `node dist/entry.js`
 # with MCP_TRANSPORT=stdio.
+# 0.0.0.0 is the in-container bind. Startup refuses to listen unless
+# CONDUIT_S2S_SECRET is a real secret (empty values and known placeholders
+# are rejected). MCP_ALLOW_INSECURE_DEV=1 is local-only and forces 127.0.0.1,
+# so this address is not used for that bypass. Publish the host port on
+# loopback unless a proxy sits in front. AUTH_MODE=gateway does not read
+# SALESFORCE_* from the environment; those arrive per request as headers.
 ENV MCP_TRANSPORT=http
 ENV PORT=8080
+ENV MCP_HTTP_HOST=0.0.0.0
 ENV LOG_LEVEL=info
 ENV AUTH_MODE=gateway
 
