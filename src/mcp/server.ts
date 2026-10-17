@@ -8,7 +8,11 @@
  *
  * In stdio mode (for standalone testing), credentials are read from env
  * once at startup and a single jsforce.Connection is held for the process
- * lifetime.
+ * lifetime. Stdio does not use CONDUIT_S2S_SECRET.
+ *
+ * HTTP mode refuses to start unless CONDUIT_S2S_SECRET is a real secret.
+ * MCP_ALLOW_INSECURE_DEV=1 is local-only and listens on 127.0.0.1. Gateway
+ * mode requires X-Salesforce-* headers and does not fall back to env.
  */
 
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
@@ -33,20 +37,63 @@ import {
 import { Logger } from '../utils/logger.js';
 import { buildConnection } from '../services/connection.js';
 import { SALESFORCE_TOOLS, callTool } from '../tools/index.js';
-import { verifyS2sHeader, S2S_HEADER } from '../s2s-verify.js';
+import {
+  isUsableConduitS2sSecret,
+  resolveHttpListenHost,
+  verifyS2sHeader,
+  S2S_HEADER,
+} from '../s2s-verify.js';
 
 const SERVER_NAME = 'salesforce-mcp';
 const SERVER_VERSION = '0.1.0';
 const MCP_PATH = '/mcp';
 
-// Conduit service-to-service auth (gateway#377 parity). Non-empty =
-// enforce X-Gateway-S2S on every /mcp request; empty = disabled, behavior
-// exactly as before (dark-by-default until the gateway provisions this
-// container's derived subkey). See src/s2s-verify.ts.
-const S2S_SECRET = process.env.CONDUIT_S2S_SECRET || '';
+function headerString(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** A duplicated or empty S2S header is not a proof. Fail closed. */
+function s2sHeaderValue(value: string | string[] | undefined): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Gateway mode has no env fallback. Returns the header names still required
+ * for the flow declared by X-Salesforce-Auth-Mode, or null when the request
+ * carries them.
+ */
+function missingGatewayCredentialHeaders(
+  headers: IncomingMessage['headers'],
+): string[] | null {
+  if (headerString(headers['x-salesforce-auth-mode']) === 'username_password') {
+    const required = [
+      ['x-salesforce-username', 'X-Salesforce-Username'],
+      ['x-salesforce-password', 'X-Salesforce-Password'],
+    ] as const;
+    const missing = required
+      .filter(([name]) => !headerString(headers[name]))
+      .map(([, label]) => label);
+    return missing.length > 0 ? missing : null;
+  }
+
+  const required = [
+    ['x-salesforce-client-id', 'X-Salesforce-Client-Id'],
+    ['x-salesforce-client-secret', 'X-Salesforce-Client-Secret'],
+    ['x-salesforce-instance-url', 'X-Salesforce-Instance-Url'],
+  ] as const;
+  const missing = required
+    .filter(([name]) => !headerString(headers[name]))
+    .map(([, label]) => label);
+  return missing.length > 0 ? missing : null;
+}
 
 export class SalesforceMcpServer {
   private httpServer: HttpServer | undefined;
+  /** Set at HTTP startup. Empty only when MCP_ALLOW_INSECURE_DEV=1. */
+  private s2sSecret = '';
 
   constructor(
     private readonly envConfig: EnvironmentConfig,
@@ -66,6 +113,46 @@ export class SalesforceMcpServer {
       await new Promise<void>((resolve) => this.httpServer!.close(() => resolve()));
       this.httpServer = undefined;
     }
+  }
+
+  /** TCP address the HTTP transport bound, if it is listening. */
+  boundAddress(): { address: string; port: number } | undefined {
+    const address = this.httpServer?.address();
+    if (!address || typeof address === 'string') return undefined;
+    return { address: address.address, port: address.port };
+  }
+
+  /**
+   * Secret for X-Gateway-S2S. Read at HTTP startup, not per request.
+   * Empty and known placeholders are fail-closed: the process exits unless
+   * MCP_ALLOW_INSECURE_DEV=1. The secret value is never written to logs.
+   */
+  private resolveHttpS2sSecret(): string {
+    const trimmed = (process.env.CONDUIT_S2S_SECRET ?? '').trim();
+    if (isUsableConduitS2sSecret(trimmed)) return trimmed;
+
+    const placeholder = trimmed.length > 0;
+    if (process.env.MCP_ALLOW_INSECURE_DEV === '1') {
+      const why = placeholder
+        ? 'CONDUIT_S2S_SECRET is a known placeholder'
+        : 'CONDUIT_S2S_SECRET is empty';
+      this.logger.error(
+        `SECURITY WARNING: ${why} and MCP_ALLOW_INSECURE_DEV=1. ` +
+          'HTTP /mcp is not enforcing X-Gateway-S2S and listens on 127.0.0.1 only. ' +
+          'Do not use this outside local development.',
+      );
+      return '';
+    }
+
+    const why = placeholder
+      ? 'CONDUIT_S2S_SECRET is a known placeholder value, not a real service-to-service secret.'
+      : 'CONDUIT_S2S_SECRET is empty.';
+    this.logger.error(
+      `Refusing to start HTTP transport: ${why} ` +
+        'An empty or placeholder secret would accept unauthenticated /mcp requests (CWE-306). ' +
+        'Set CONDUIT_S2S_SECRET to the gateway-provisioned secret, or set MCP_ALLOW_INSECURE_DEV=1 for local development only.',
+    );
+    process.exit(1);
   }
 
   // ─────────────────────── stdio mode ───────────────────────
@@ -99,7 +186,22 @@ export class SalesforceMcpServer {
   // ─────────────────────── http mode ───────────────────────
 
   private async startHttp(): Promise<void> {
-    const { host, port } = this.envConfig.transport;
+    const s2sSecret = this.resolveHttpS2sSecret();
+    const listen = resolveHttpListenHost({
+      s2sSecret,
+      configuredHost: this.envConfig.transport.host,
+      explicitHost: process.env.MCP_HTTP_HOST,
+    });
+    if (listen.overriddenHost !== undefined) {
+      this.logger.error(
+        `WARNING: MCP_HTTP_HOST=${listen.overriddenHost} is not 127.0.0.1. ` +
+          'MCP_ALLOW_INSECURE_DEV=1 without a usable CONDUIT_S2S_SECRET cannot listen there. ' +
+          'Binding 127.0.0.1 only.',
+      );
+    }
+    this.s2sSecret = s2sSecret;
+    const host = listen.host;
+    const { port } = this.envConfig.transport;
 
     this.httpServer = createHttpServer(async (req, res) => {
       try {
@@ -118,7 +220,7 @@ export class SalesforceMcpServer {
       this.httpServer!.listen(port, host, () => {
         this.logger.info(
           `salesforce-mcp listening on http://${host}:${port}${MCP_PATH} (health: /health)`,
-          { build: this.envConfig.build, authMode: this.envConfig.authMode, s2sEnforced: S2S_SECRET !== '' },
+          { build: this.envConfig.build, authMode: this.envConfig.authMode, s2sEnforced: this.s2sSecret !== '' },
         );
         resolve();
       });
@@ -149,7 +251,12 @@ export class SalesforceMcpServer {
     if (url.pathname === MCP_PATH) {
       // S2S guard runs first: a forged request must never reach credential
       // handling, where the first tool call would mint a jsforce.Connection.
-      if (S2S_SECRET && !verifyS2sHeader(req.headers[S2S_HEADER] as string | undefined, S2S_SECRET)) {
+      // An empty s2sSecret is only reachable when MCP_ALLOW_INSECURE_DEV=1;
+      // startup refuses otherwise. A configured secret is always enforced.
+      if (
+        this.s2sSecret &&
+        !verifyS2sHeader(s2sHeaderValue(req.headers[S2S_HEADER]), this.s2sSecret)
+      ) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -159,6 +266,24 @@ export class SalesforceMcpServer {
         );
         return;
       }
+
+      // Gateway mode: credentials must arrive on this request. Falling
+      // through would resolve SALESFORCE_* from the process environment.
+      if (this.envConfig.authMode === 'gateway') {
+        const missing = missingGatewayCredentialHeaders(req.headers);
+        if (missing) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: 'Missing credentials',
+              message: `Gateway mode requires ${missing.join(', ')} headers`,
+              required: missing,
+            }),
+          );
+          return;
+        }
+      }
+
       await this.handleMcpRequest(req, res);
       return;
     }

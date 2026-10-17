@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { verifyS2sHeader } from './s2s-verify.js';
+import { isUsableConduitS2sSecret, resolveHttpListenHost, verifyS2sHeader } from './s2s-verify.js';
 
 function mintHeader(secret: string, unixSeconds: number): string {
   const message = `t=${unixSeconds}`;
@@ -44,7 +44,7 @@ describe('verifyS2sHeader', () => {
     expect(verifyS2sHeader(undefined, SECRET)).toBe(false);
   });
 
-  it('rejects when the secret is empty (dark-by-default guarantee)', () => {
+  it('rejects when the secret is empty', () => {
     const now = Math.floor(Date.now() / 1000);
     expect(verifyS2sHeader(mintHeader(SECRET, now), '')).toBe(false);
   });
@@ -54,5 +54,67 @@ describe('verifyS2sHeader', () => {
     const header = mintHeader(SECRET, now);
     const tampered = header.slice(0, -1) + (header.endsWith('0') ? '1' : '0');
     expect(verifyS2sHeader(tampered, SECRET)).toBe(false);
+  });
+});
+
+describe('isUsableConduitS2sSecret', () => {
+  it('accepts a non-placeholder secret and ignores surrounding whitespace', () => {
+    expect(isUsableConduitS2sSecret('  gateway-provisioned-subkey  ')).toBe(true);
+  });
+
+  it('rejects empty, whitespace, known placeholders, and unresolved templates', () => {
+    expect(isUsableConduitS2sSecret(undefined)).toBe(false);
+    expect(isUsableConduitS2sSecret('')).toBe(false);
+    expect(isUsableConduitS2sSecret('   ')).toBe(false);
+    for (const placeholder of ['changeme', 'Change-Me', 'placeholder', 'your-s2s-secret', 'secret', 'password', 'test']) {
+      expect(isUsableConduitS2sSecret(placeholder)).toBe(false);
+    }
+    expect(isUsableConduitS2sSecret('  ${user_config.conduit_s2s_secret}  ')).toBe(false);
+  });
+});
+
+describe('resolveHttpListenHost', () => {
+  it('honors MCP_HTTP_HOST when a secret is configured', () => {
+    expect(resolveHttpListenHost({
+      s2sSecret: 'real-secret',
+      configuredHost: '127.0.0.1',
+      explicitHost: '0.0.0.0',
+    })).toEqual({ host: '0.0.0.0', overriddenHost: undefined });
+  });
+
+  it('keeps the configured host when the secret is set and MCP_HTTP_HOST is unset', () => {
+    expect(resolveHttpListenHost({
+      s2sSecret: 'real-secret',
+      configuredHost: '10.1.2.3',
+      explicitHost: undefined,
+    })).toEqual({ host: '10.1.2.3', overriddenHost: undefined });
+  });
+
+  it('binds 127.0.0.1 when there is no secret', () => {
+    expect(resolveHttpListenHost({
+      s2sSecret: '',
+      configuredHost: '0.0.0.0',
+      explicitHost: undefined,
+    })).toEqual({ host: '127.0.0.1', overriddenHost: undefined });
+  });
+
+  it('forces 127.0.0.1 and reports a non-loopback MCP_HTTP_HOST when there is no secret', () => {
+    expect(resolveHttpListenHost({
+      s2sSecret: '',
+      configuredHost: '10.1.2.3',
+      explicitHost: ' 0.0.0.0 ',
+    })).toEqual({ host: '127.0.0.1', overriddenHost: '0.0.0.0' });
+
+    expect(resolveHttpListenHost({
+      s2sSecret: '',
+      configuredHost: '0.0.0.0',
+      explicitHost: 'localhost',
+    }).overriddenHost).toBe('localhost');
+
+    expect(resolveHttpListenHost({
+      s2sSecret: '',
+      configuredHost: '0.0.0.0',
+      explicitHost: '[::1]',
+    }).overriddenHost).toBe('[::1]');
   });
 });
