@@ -33,7 +33,7 @@ Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_
 | `MCP_TRANSPORT` | No | `http` (default) or `stdio`. |
 | `AUTH_MODE` | No | `gateway` (image and Compose default) or `env`. Gateway mode requires the `X-Salesforce-*` headers on each `/mcp` request and never falls back to `SALESFORCE_*`. `env` uses those variables only after S2S auth succeeds. |
 | `CONDUIT_S2S_SECRET` | Yes for HTTP | Service-to-service secret. HTTP logs an error and exits non-zero when this is empty or a known placeholder (`changeme`, `placeholder`, `your-s2s-secret`, `secret`, `password`, `test`, an unresolved `${...}` template, and the other stand-ins in `src/s2s-verify.ts`). Never commit a real value. |
-| `MCP_ALLOW_INSECURE_DEV` | No | Set to exactly `1` only for local development to start HTTP without a usable secret. The process logs a warning, does not check `X-Gateway-S2S`, and listens on `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` is ignored and the override is logged. |
+| `MCP_ALLOW_INSECURE_DEV` | No | Set to exactly `1` only for local development to start HTTP without `CONDUIT_S2S_SECRET`. The process logs a warning, does not check `X-Gateway-S2S`, and listens on `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` is ignored and the override is logged. A known placeholder secret still refuses to start. |
 | `MCP_HTTP_HOST` | No | Bind address when a usable `CONDUIT_S2S_SECRET` is set. When unset, a configured secret keeps `HOST` (default `0.0.0.0`). Without a usable secret the listener is `127.0.0.1`. The container image sets `0.0.0.0`. |
 | `PORT` | No | HTTP port. Defaults to `8080`. |
 | `HOST` | No | Fallback bind address when `MCP_HTTP_HOST` is unset and a secret is configured. Defaults to `0.0.0.0`. |
