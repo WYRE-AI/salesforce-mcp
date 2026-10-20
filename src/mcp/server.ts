@@ -92,7 +92,7 @@ function missingGatewayCredentialHeaders(
 
 export class SalesforceMcpServer {
   private httpServer: HttpServer | undefined;
-  /** Set at HTTP startup. Empty only when MCP_ALLOW_INSECURE_DEV=1. */
+  /** Set at HTTP startup. Empty only when MCP_ALLOW_INSECURE_DEV=1 bypassed an empty secret. */
   private s2sSecret = '';
 
   constructor(
@@ -124,32 +124,36 @@ export class SalesforceMcpServer {
 
   /**
    * Secret for X-Gateway-S2S. Read at HTTP startup, not per request.
-   * Empty and known placeholders are fail-closed: the process exits unless
-   * MCP_ALLOW_INSECURE_DEV=1. The secret value is never written to logs.
+   * A known placeholder is always fail-closed, even with MCP_ALLOW_INSECURE_DEV=1 —
+   * that flag only bypasses a genuinely empty secret. The secret value is
+   * never written to logs.
    */
   private resolveHttpS2sSecret(): string {
     const trimmed = (process.env.CONDUIT_S2S_SECRET ?? '').trim();
     if (isUsableConduitS2sSecret(trimmed)) return trimmed;
 
-    const placeholder = trimmed.length > 0;
-    if (process.env.MCP_ALLOW_INSECURE_DEV === '1') {
-      const why = placeholder
-        ? 'CONDUIT_S2S_SECRET is a known placeholder'
-        : 'CONDUIT_S2S_SECRET is empty';
+    if (trimmed.length > 0) {
       this.logger.error(
-        `SECURITY WARNING: ${why} and MCP_ALLOW_INSECURE_DEV=1. ` +
+        'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is a known placeholder value, ' +
+          'not a real service-to-service secret. A placeholder secret would accept ' +
+          'unauthenticated /mcp requests (CWE-306) and is refused even with ' +
+          'MCP_ALLOW_INSECURE_DEV=1. Set CONDUIT_S2S_SECRET to the gateway-provisioned secret.',
+      );
+      process.exit(1);
+    }
+
+    if (process.env.MCP_ALLOW_INSECURE_DEV === '1') {
+      this.logger.error(
+        'SECURITY WARNING: CONDUIT_S2S_SECRET is empty and MCP_ALLOW_INSECURE_DEV=1. ' +
           'HTTP /mcp is not enforcing X-Gateway-S2S and listens on 127.0.0.1 only. ' +
           'Do not use this outside local development.',
       );
       return '';
     }
 
-    const why = placeholder
-      ? 'CONDUIT_S2S_SECRET is a known placeholder value, not a real service-to-service secret.'
-      : 'CONDUIT_S2S_SECRET is empty.';
     this.logger.error(
-      `Refusing to start HTTP transport: ${why} ` +
-        'An empty or placeholder secret would accept unauthenticated /mcp requests (CWE-306). ' +
+      'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is empty. ' +
+        'An empty secret would accept unauthenticated /mcp requests (CWE-306). ' +
         'Set CONDUIT_S2S_SECRET to the gateway-provisioned secret, or set MCP_ALLOW_INSECURE_DEV=1 for local development only.',
     );
     process.exit(1);

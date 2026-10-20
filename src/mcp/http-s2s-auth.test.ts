@@ -2,7 +2,8 @@
  * HTTP transport fail-closed auth.
  *
  * Startup requires a usable CONDUIT_S2S_SECRET unless MCP_ALLOW_INSECURE_DEV=1.
- * Known placeholders are treated as missing. That flag forces 127.0.0.1.
+ * A known placeholder always refuses to start, even with that flag set — it
+ * only bypasses a genuinely empty secret, and forces 127.0.0.1 when it does.
  * /mcp rejects a missing or invalid X-Gateway-S2S header.
  * AUTH_MODE=gateway rejects requests that omit credential headers and must
  * not fall back to SALESFORCE_* in process.env.
@@ -191,6 +192,17 @@ describe('HTTP startup', () => {
     process.env.MCP_ALLOW_INSECURE_DEV = 'true';
     await expectRefusal((text) => {
       expect(text).toContain('Refusing to start HTTP transport');
+    });
+  });
+
+  it('refuses a placeholder even when MCP_ALLOW_INSECURE_DEV=1', async () => {
+    process.env.CONDUIT_S2S_SECRET = 'changeme';
+    process.env.MCP_ALLOW_INSECURE_DEV = '1';
+    await expectRefusal((text) => {
+      expect(text).toContain('Refusing to start HTTP transport');
+      expect(text).toContain('known placeholder');
+      expect(text).toContain('MCP_ALLOW_INSECURE_DEV=1');
+      expect(text).not.toContain('SECURITY WARNING');
     });
   });
 
