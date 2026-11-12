@@ -49,6 +49,10 @@ ENV BUILD_VERSION=${VERSION}
 ENV BUILD_COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_DATE=${BUILD_DATE}
 
+# Security: patch OS packages and drop the npm CLI, which the runtime does not use
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 # Run as non-root
 USER node
 
