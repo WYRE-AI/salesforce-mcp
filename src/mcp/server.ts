@@ -232,7 +232,17 @@ export class SalesforceMcpServer {
   }
 
   private async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    // Only the path is used, so parse against a fixed base rather than the
+    // client-supplied Host header. A target that still cannot be parsed (e.g. "//")
+    // must answer 400, never throw out of the listener.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Bad request' }));
+      return;
+    }
 
     // ── /health: no auth, gateway probe target ──
     if (url.pathname === '/health' && req.method === 'GET') {
